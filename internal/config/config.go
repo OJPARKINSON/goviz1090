@@ -22,6 +22,10 @@ type Config struct {
 	ShowTrails  bool
 	TrailLength int
 	LabelDetail int
+	DisplayTTL  int
+
+	// Debug options
+	Debug bool
 }
 
 // DefaultConfig returns a configuration with sensible defaults
@@ -40,6 +44,8 @@ func DefaultConfig() *Config {
 		ShowTrails:    true,
 		TrailLength:   50,
 		LabelDetail:   2,
+		DisplayTTL:    30,
+		Debug:         false,
 	}
 }
 
