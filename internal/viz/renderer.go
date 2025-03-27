@@ -84,7 +84,7 @@ func (r *Renderer) RenderFrame(aircraft map[uint32]*adsb.Aircraft, centerLat, ce
 		}
 
 		// Calculate screen position
-		x, y := r.latLonToScreen(a.Lat, a.Lon, r.centerLat, r.centerLon, r.maxDistance)
+		x, y := r.latLonToScreen(a.Lat, a.Lon, centerLat, centerLon, maxDistance)
 
 		// Update aircraft screen position
 		a.X = x
@@ -128,7 +128,7 @@ func (r *Renderer) latLonToScreen(lat, lon, centerLat, centerLon, maxDistance fl
 	scale := float64(r.height) / (maxDistance * 2)
 
 	x := r.width/2 + int(dx*scale)
-	y := r.height/2 - int(dy*scale)
+	y := r.height/2 - int(dy*scale) // Note the minus sign for Y
 
 	return x, y
 }
@@ -206,7 +206,7 @@ func (r *Renderer) drawTrails(a *adsb.Aircraft) {
 		age := 1.0 - float64(i)/float64(len(a.Trail))
 		alpha := uint8(128 * age)
 
-		// Convert trail positions to screen coordinates
+		// Convert trail positions to screen coordinates USING CURRENT MAP CENTER
 		x1, y1 := r.latLonToScreen(a.Trail[i].Lat, a.Trail[i].Lon, r.centerLat, r.centerLon, r.maxDistance)
 		x2, y2 := r.latLonToScreen(a.Trail[i+1].Lat, a.Trail[i+1].Lon, r.centerLat, r.centerLon, r.maxDistance)
 

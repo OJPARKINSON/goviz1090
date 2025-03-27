@@ -373,25 +373,53 @@ func (a *App) handleInput() bool {
 
 // Run starts the main application loop
 func (a *App) Run() error {
-	a.mutex.Lock()
-	testAircraft := &adsb.Aircraft{
-		ICAO:       0xABCDEF,
-		Flight:     "TEST01",
-		Altitude:   10000,
-		Speed:      450,
-		Heading:    45,
-		Lat:        122.4195,
-		Lon:        37.7747,
-		Seen:       time.Now(),
-		SeenLatLon: time.Now(),
+	mockAircraft := []*adsb.Aircraft{
+		{
+			ICAO:       0xABCDEF,
+			Flight:     "SWA1234",
+			Altitude:   10000,
+			Speed:      450,
+			Heading:    45,
+			Lat:        37.6188,
+			Lon:        -122.3756,
+			Seen:       time.Now(),
+			SeenLatLon: time.Now(),
+		},
+		{
+			ICAO:       0x123456,
+			Flight:     "UAL789",
+			Altitude:   25000,
+			Speed:      500,
+			Heading:    270,
+			Lat:        37.7749,
+			Lon:        -122.4194,
+			Seen:       time.Now(),
+			SeenLatLon: time.Now(),
+		},
+		{
+			ICAO:       0x789ABC,
+			Flight:     "DAL456",
+			Altitude:   35000,
+			Speed:      550,
+			Heading:    180,
+			Lat:        37.8716,
+			Lon:        -122.2727,
+			Seen:       time.Now(),
+			SeenLatLon: time.Now(),
+		},
 	}
-	a.aircraft[0xABCDEF] = testAircraft
+
+	a.mutex.Lock()
+	for _, ac := range mockAircraft {
+		a.aircraft[ac.ICAO] = ac
+	}
 	a.mutex.Unlock()
+
 	fmt.Println("aircraft ", a.aircraft)
 	a.running = true
 
 	// Setup cleanup timer
-	cleanupTicker := time.NewTicker(10 * time.Second)
+	cleanupTicker := time.NewTicker(1 * time.Second)
 	defer cleanupTicker.Stop()
 
 	a.lastFrameTime = time.Now()
