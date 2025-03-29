@@ -24,9 +24,8 @@ type Point struct {
 
 // Line represents a map line segment
 type Line struct {
-	Start Point
-	End   Point
-	// Bounding box for quick intersection tests
+	Start  Point
+	End    Point
 	LatMin float64
 	LatMax float64
 	LonMin float64
@@ -76,26 +75,32 @@ func NewMap() *Map {
 
 // LoadMapData loads map data from binary and text files
 func (m *Map) LoadMapData(mapDataFile, airportDataFile, placeNamesFile, airportNamesFile string) error {
-	// Load map geometry
-	if err := m.loadMapGeometry(mapDataFile, &m.Root, &m.MapLines); err != nil {
+	// Just log errors but continue even if files are missing
+	if _, err := os.Stat(mapDataFile); os.IsNotExist(err) {
+		fmt.Printf("Warning: Map data file not found: %s\n", mapDataFile)
+	} else if err := m.loadMapGeometry(mapDataFile, &m.Root, &m.MapLines); err != nil {
 		fmt.Printf("Warning: Failed to load map data: %v\n", err)
 	}
 
-	// Load airport geometry
-	if err := m.loadMapGeometry(airportDataFile, &m.AirportRoot, &m.AirportLines); err != nil {
+	if _, err := os.Stat(airportDataFile); os.IsNotExist(err) {
+		fmt.Printf("Warning: Airport data file not found: %s\n", airportDataFile)
+	} else if err := m.loadMapGeometry(airportDataFile, &m.AirportRoot, &m.AirportLines); err != nil {
 		fmt.Printf("Warning: Failed to load airport data: %v\n", err)
 	}
 
-	// Load place names
-	if err := m.loadLabels(placeNamesFile, &m.PlaceNames); err != nil {
+	if _, err := os.Stat(placeNamesFile); os.IsNotExist(err) {
+		fmt.Printf("Warning: Place names file not found: %s\n", placeNamesFile)
+	} else if err := m.loadLabels(placeNamesFile, &m.PlaceNames); err != nil {
 		fmt.Printf("Warning: Failed to load place names: %v\n", err)
 	}
 
-	// Load airport names
-	if err := m.loadLabels(airportNamesFile, &m.AirportNames); err != nil {
+	if _, err := os.Stat(airportNamesFile); os.IsNotExist(err) {
+		fmt.Printf("Warning: Airport names file not found: %s\n", airportNamesFile)
+	} else if err := m.loadLabels(airportNamesFile, &m.AirportNames); err != nil {
 		fmt.Printf("Warning: Failed to load airport names: %v\n", err)
 	}
 
+	// Continue even if nothing was loaded
 	return nil
 }
 

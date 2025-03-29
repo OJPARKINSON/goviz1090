@@ -5,16 +5,15 @@ import (
 	"math"
 	"time"
 
-	"github.com/veandco/go-sdl2/sdl"
-	"github.com/veandco/go-sdl2/ttf"
-
 	"github.com/OJPARKINSON/viz1090/internal/adsb"
 	"github.com/OJPARKINSON/viz1090/internal/map_system"
+	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // Constants for visualization
 const (
-	LATLONMULT   = 111.195 // 6371.0 * M_PI / 180.0 - conversion factor for lat/lon to km
+	LATLONMULT   = 111.195 // 6371.0 * math.Pi / 180.0 - conversion factor for lat/lon to km
 	PAD          = 5       // Padding for UI elements
 	ROUND_RADIUS = 3       // Radius of rounded corners
 )
@@ -38,72 +37,259 @@ var (
 	ColorButtonBg   = sdl.Color{R: 0, G: 0, B: 0, A: 255}
 )
 
+// LabelSystem manages aircraft labels and prevents overlaps
+type LabelSystem struct {
+	width     int
+	height    int
+	uiScale   int
+	metric    bool
+	labelFont *ttf.Font
+}
+
+// NewLabelSystem creates a new label system
+func NewLabelSystem(width, height, uiScale int, metric bool) *LabelSystem {
+	return &LabelSystem{
+		width:   width,
+		height:  height,
+		uiScale: uiScale,
+		metric:  metric,
+	}
+}
+
+// SetFont sets the font for the label system
+func (ls *LabelSystem) SetFont(font *ttf.Font) {
+	ls.labelFont = font
+}
+
+// UpdateLabels updates all aircraft labels to avoid overlaps
+func (ls *LabelSystem) UpdateLabels(aircraft map[uint32]*adsb.Aircraft) {
+	// Resolve label conflicts - simplified version for now
+	for i := 0; i < 4; i++ { // Iterate a few times for better results
+		ls.resolveOverlaps(aircraft)
+	}
+}
+
+// resolveOverlaps detects and resolves label overlaps
+func (ls *LabelSystem) resolveOverlaps(aircraft map[uint32]*adsb.Aircraft) {
+	// Algorithm to prevent label overlaps
+	// This is a simplified implementation
+
+	// Clear forces
+	for _, a := range aircraft {
+		a.LabelDX = 0
+		a.LabelDY = 0
+	}
+
+	// Calculate forces based on overlaps
+	for _, a1 := range aircraft {
+		if a1.LabelW == 0 || a1.LabelH == 0 {
+			continue
+		}
+
+		// Apply screen edge forces
+		edge := float64(15 * ls.uiScale)
+		if a1.LabelX < edge {
+			a1.LabelDX += 0.01 * (edge - a1.LabelX)
+		}
+		if a1.LabelX+a1.LabelW > float64(ls.width)-edge {
+			a1.LabelDX += 0.01 * (float64(ls.width) - edge - a1.LabelX - a1.LabelW)
+		}
+		if a1.LabelY < edge {
+			a1.LabelDY += 0.01 * (edge - a1.LabelY)
+		}
+		if a1.LabelY+a1.LabelH > float64(ls.height)-edge {
+			a1.LabelDY += 0.01 * (float64(ls.height) - edge - a1.LabelY - a1.LabelH)
+		}
+
+		// Force to keep near aircraft
+		ax, ay := float64(a1.X), float64(a1.Y)
+		dx := a1.LabelX + a1.LabelW/2 - ax
+		dy := a1.LabelY + a1.LabelH/2 - ay
+		dist := math.Sqrt(dx*dx + dy*dy)
+
+		if dist > 0 {
+			// Pull towards aircraft
+			targetDist := 40.0 * float64(ls.uiScale)
+			force := 0.0015 * (dist - targetDist)
+			if force != 0 {
+				a1.LabelDX -= force * dx / dist
+				a1.LabelDY -= force * dy / dist
+			}
+		}
+
+		// Forces from other labels
+		for _, a2 := range aircraft {
+			if a1 == a2 || a2.LabelW == 0 || a2.LabelH == 0 {
+				continue
+			}
+
+			dx := a1.LabelX + a1.LabelW/2 - (a2.LabelX + a2.LabelW/2)
+			dy := a1.LabelY + a1.LabelH/2 - (a2.LabelY + a2.LabelH/2)
+			dist := math.Sqrt(dx*dx + dy*dy)
+
+			if dist < 0.001 {
+				continue // Avoid division by zero
+			}
+
+			// Calculate repulsion
+			targetDist := (a1.LabelW + a2.LabelW + a1.LabelH + a2.LabelH) / 4
+
+			if dist < targetDist {
+				force := 0.001 * (targetDist - dist)
+				a1.LabelDX += force * dx / dist
+				a1.LabelDY += force * dy / dist
+			}
+		}
+	}
+
+	// Apply forces with damping
+	for _, a := range aircraft {
+		if a.LabelW == 0 || a.LabelH == 0 {
+			continue
+		}
+
+		// Apply damping
+		a.LabelDX *= 0.85
+		a.LabelDY *= 0.85
+
+		// Limit velocity
+		maxVel := 2.0
+		if math.Abs(a.LabelDX) > maxVel {
+			a.LabelDX = math.Copysign(maxVel, a.LabelDX)
+		}
+		if math.Abs(a.LabelDY) > maxVel {
+			a.LabelDY = math.Copysign(maxVel, a.LabelDY)
+		}
+
+		// Apply movement
+		a.LabelX += a.LabelDX
+		a.LabelY += a.LabelDY
+	}
+}
+
 // Renderer handles drawing the radar display
 type Renderer struct {
+	window      *sdl.Window
 	renderer    *sdl.Renderer
 	regularFont *ttf.Font
 	boldFont    *ttf.Font
 	labelFont   *ttf.Font
-	messageFont *ttf.Font // Added missing font for status box
+	mapTexture  *sdl.Texture
 	width       int
 	height      int
 	uiScale     int
 	metric      bool
-	mapTexture  *sdl.Texture
 	lastRedraw  time.Time
 	mapDrawn    bool
 	mapSystem   *map_system.Map
 	labelSystem *LabelSystem
+
+	// Mouse and interaction
+	mouseMoved bool
+	mouseX     int
+	mouseY     int
+	clickX     int
+	clickY     int
+	clickTime  time.Time
 }
 
 // NewRenderer creates a new visualization renderer
-func NewRenderer(renderer *sdl.Renderer, regularFont, boldFont *ttf.Font, width, height, uiScale int, metric bool) *Renderer {
-	// Create the map texture for caching
-	mapTexture, err := renderer.CreateTexture(
+func NewRenderer(width, height, uiScale int, metric bool) (*Renderer, error) {
+	var err error
+	r := &Renderer{
+		width:    width,
+		height:   height,
+		uiScale:  uiScale,
+		metric:   metric,
+		mapDrawn: false,
+	}
+
+	// Initialize SDL
+	if err = sdl.Init(sdl.INIT_VIDEO); err != nil {
+		return nil, fmt.Errorf("failed to initialize SDL: %v", err)
+	}
+
+	// Initialize TTF
+	if err = ttf.Init(); err != nil {
+		sdl.Quit()
+		return nil, fmt.Errorf("failed to initialize TTF: %v", err)
+	}
+
+	// Get display size if needed
+	if width == 0 || height == 0 {
+		displayCount, err := sdl.GetNumVideoDisplays()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get display count: %v", err)
+		}
+
+		for i := 0; i < displayCount; i++ {
+			bounds, err := sdl.GetDisplayBounds(i)
+			if err != nil {
+				continue
+			}
+			width = int(bounds.W)
+			height = int(bounds.H)
+			break
+		}
+	}
+
+	// Create window
+	r.window, err = sdl.CreateWindow("viz1090-go", sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED,
+		int32(width), int32(height), sdl.WINDOW_SHOWN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create window: %v", err)
+	}
+
+	// Create renderer
+	r.renderer, err = sdl.CreateRenderer(r.window, -1, sdl.RENDERER_ACCELERATED)
+	if err != nil {
+		r.window.Destroy()
+		return nil, fmt.Errorf("failed to create renderer: %v", err)
+	}
+
+	// Create map texture
+	r.mapTexture, err = r.renderer.CreateTexture(
 		sdl.PIXELFORMAT_RGBA8888,
 		sdl.TEXTUREACCESS_TARGET,
 		int32(width), int32(height))
-
 	if err != nil {
-		fmt.Printf("Warning: Failed to create map texture: %v\n", err)
+		r.renderer.Destroy()
+		r.window.Destroy()
+		return nil, fmt.Errorf("failed to create map texture: %v", err)
 	}
 
-	// Create a label font specifically for aircraft labels
-	labelFont, err := ttf.OpenFont("font/TerminusTTF-Bold-4.46.0.ttf", 12*uiScale)
+	// Load fonts
+	r.regularFont, err = ttf.OpenFont("font/TerminusTTF-4.46.0.ttf", 12*uiScale)
 	if err != nil {
-		fmt.Printf("Warning: Failed to load label font: %v\n", err)
-		labelFont = regularFont // Fallback to regular font
+		r.mapTexture.Destroy()
+		r.renderer.Destroy()
+		r.window.Destroy()
+		return nil, fmt.Errorf("failed to load regular font: %v", err)
 	}
 
-	// Create message font (same as regular font, used for status box)
-	messageFont := regularFont
-
-	// Create map system
-	mapSystem := map_system.NewMap()
-	_ = mapSystem.LoadMapData("mapdata.bin", "airportdata.bin", "mapnames", "airportnames")
-
-	// Create label system
-	labelSystem := NewLabelSystem(width, height, uiScale, metric)
-
-	return &Renderer{
-		renderer:    renderer,
-		regularFont: regularFont,
-		boldFont:    boldFont,
-		labelFont:   labelFont,
-		messageFont: messageFont,
-		width:       width,
-		height:      height,
-		uiScale:     uiScale,
-		metric:      metric,
-		mapTexture:  mapTexture,
-		mapSystem:   mapSystem,
-		labelSystem: labelSystem,
+	r.boldFont, err = ttf.OpenFont("font/TerminusTTF-Bold-4.46.0.ttf", 12*uiScale)
+	if err != nil {
+		r.regularFont.Close()
+		r.mapTexture.Destroy()
+		r.renderer.Destroy()
+		r.window.Destroy()
+		return nil, fmt.Errorf("failed to load bold font: %v", err)
 	}
-}
 
-// GetHeight returns the renderer height
-func (r *Renderer) GetHeight() int {
-	return r.height
+	r.labelFont = r.boldFont
+
+	// Initialize the label system
+	r.labelSystem = NewLabelSystem(width, height, uiScale, metric)
+	r.labelSystem.SetFont(r.labelFont)
+
+	// Initialize the map system
+	r.mapSystem = map_system.NewMap()
+	err = r.mapSystem.LoadMapData("mapdata.bin", "airportdata.bin", "mapnames", "airportnames")
+	if err != nil {
+		fmt.Printf("Warning: Failed to load map data: %v\n", err)
+	}
+
+	return r, nil
 }
 
 // RenderFrame draws a complete frame with all aircraft
@@ -136,7 +322,7 @@ func (r *Renderer) RenderFrame(aircraft map[uint32]*adsb.Aircraft, centerLat, ce
 	r.drawScaleBars(maxDistance)
 
 	// Draw status information
-	r.drawStatus(len(aircraft), r.countVisibleAircraft(aircraft), centerLat, centerLon)
+	r.drawStatus(countAircraft(aircraft), countVisibleAircraft(aircraft), centerLat, centerLon)
 
 	// Present the renderer
 	r.renderer.Present()
@@ -153,24 +339,34 @@ func (r *Renderer) calculateScreenPositions(aircraft map[uint32]*adsb.Aircraft, 
 		x, y := r.latLonToScreen(a.Lat, a.Lon, centerLat, centerLon, maxDistance)
 		a.X = x
 		a.Y = y
+
+		// Initialize label position if needed
+		if a.LabelX == 0 && a.LabelY == 0 {
+			a.LabelX = float64(x)
+			a.LabelY = float64(y) + 20*float64(r.uiScale)
+		}
 	}
 }
 
-// countVisibleAircraft counts aircraft with valid positions
-func (r *Renderer) countVisibleAircraft(aircraft map[uint32]*adsb.Aircraft) int {
-	count := 0
-	for _, a := range aircraft {
-		if a.Lat != 0 && a.Lon != 0 {
-			count++
-		}
-	}
-	return count
+// latLonToScreen converts geographical coordinates to screen coordinates
+func (r *Renderer) latLonToScreen(lat, lon, centerLat, centerLon, maxDistance float64) (int, int) {
+	// Convert lat/lon to distance in NM
+	dx := (lon - centerLon) * math.Cos(((lat+centerLat)/2.0)*math.Pi/180.0) * 60
+	dy := (lat - centerLat) * 60
+
+	// Scale to screen coordinates
+	scale := float64(r.height) / (maxDistance * 2)
+
+	x := r.width/2 + int(dx*scale)
+	y := r.height/2 - int(dy*scale) // Note the minus sign for Y
+
+	return x, y
 }
 
 // drawMap renders the geographic map to a texture
 func (r *Renderer) drawMap(centerLat, centerLon, maxDistance float64) {
 	// Save original render target
-	original, _ := r.renderer.GetRenderTarget()
+	original := r.renderer.GetRenderTarget()
 
 	// Set map texture as render target
 	r.renderer.SetRenderTarget(r.mapTexture)
@@ -180,73 +376,68 @@ func (r *Renderer) drawMap(centerLat, centerLon, maxDistance float64) {
 	r.renderer.Clear()
 
 	// Calculate visible area bounds
-	// Convert screen edges to lat/lon
-	var latMin, latMax, lonMin, lonMax float64
+	latMin, lonMin, latMax, lonMax := r.calculateVisibleBounds(centerLat, centerLon, maxDistance)
 
-	// Bottom-left corner
-	latLonFromScreenCoords(&latMin, &lonMin, 0, r.height, centerLat, centerLon, maxDistance, r.width, r.height)
+	// Draw map elements if available
+	if r.mapSystem != nil {
+		// Get visible map features
+		mapLines, airportLines := r.mapSystem.GetVisibleLines(latMin, latMax, lonMin, lonMax)
 
-	// Top-right corner
-	latLonFromScreenCoords(&latMax, &lonMax, r.width, 0, centerLat, centerLon, maxDistance, r.width, r.height)
+		// Draw map lines
+		r.renderer.SetDrawColor(ColorMap.R, ColorMap.G, ColorMap.B, ColorMap.A)
+		for _, line := range mapLines {
+			x1, y1 := r.latLonToScreen(line.Start.Lat, line.Start.Lon, centerLat, centerLon, maxDistance)
+			x2, y2 := r.latLonToScreen(line.End.Lat, line.End.Lon, centerLat, centerLon, maxDistance)
 
-	// Get visible map features
-	mapLines, airportLines := r.mapSystem.GetVisibleLines(latMin, latMax, lonMin, lonMax)
+			// Skip if outside viewport
+			if r.outOfBounds(x1, y1) && r.outOfBounds(x2, y2) {
+				continue
+			}
 
-	// Draw map lines
-	r.renderer.SetDrawColor(ColorMap.R, ColorMap.G, ColorMap.B, ColorMap.A)
-	for _, line := range mapLines {
-		x1, y1 := r.latLonToScreen(line.Start.Lat, line.Start.Lon, centerLat, centerLon, maxDistance)
-		x2, y2 := r.latLonToScreen(line.End.Lat, line.End.Lon, centerLat, centerLon, maxDistance)
-
-		// Skip if both endpoints are outside screen
-		if (x1 < 0 || x1 > r.width || y1 < 0 || y1 > r.height) &&
-			(x2 < 0 || x2 > r.width || y2 < 0 || y2 > r.height) {
-			continue
+			r.renderer.DrawLine(int32(x1), int32(y1), int32(x2), int32(y2))
 		}
 
-		r.renderer.DrawLine(int32(x1), int32(y1), int32(x2), int32(y2))
-	}
+		// Draw airport lines
+		r.renderer.SetDrawColor(ColorAirport.R, ColorAirport.G, ColorAirport.B, ColorAirport.A)
+		for _, line := range airportLines {
+			x1, y1 := r.latLonToScreen(line.Start.Lat, line.Start.Lon, centerLat, centerLon, maxDistance)
+			x2, y2 := r.latLonToScreen(line.End.Lat, line.End.Lon, centerLat, centerLon, maxDistance)
 
-	// Draw airport lines
-	r.renderer.SetDrawColor(ColorAirport.R, ColorAirport.G, ColorAirport.B, ColorAirport.A)
-	for _, line := range airportLines {
-		x1, y1 := r.latLonToScreen(line.Start.Lat, line.Start.Lon, centerLat, centerLon, maxDistance)
-		x2, y2 := r.latLonToScreen(line.End.Lat, line.End.Lon, centerLat, centerLon, maxDistance)
+			// Skip if outside viewport
+			if r.outOfBounds(x1, y1) && r.outOfBounds(x2, y2) {
+				continue
+			}
 
-		// Skip if both endpoints are outside screen
-		if (x1 < 0 || x1 > r.width || y1 < 0 || y1 > r.height) &&
-			(x2 < 0 || x2 > r.width || y2 < 0 || y2 > r.height) {
-			continue
+			r.renderer.DrawLine(int32(x1), int32(y1), int32(x2), int32(y2))
 		}
 
-		r.renderer.DrawLine(int32(x1), int32(y1), int32(x2), int32(y2))
-	}
+		// Draw place labels
+		placeLabels, airportLabels := r.mapSystem.GetVisibleLabels(latMin, latMax, lonMin, lonMax)
 
-	// Get visible labels
-	placeLabels, airportLabels := r.mapSystem.GetVisibleLabels(latMin, latMax, lonMin, lonMax)
-
-	// Draw place labels
-	for _, label := range placeLabels {
-		x, y := r.latLonToScreen(label.Location.Lat, label.Location.Lon, centerLat, centerLon, maxDistance)
-
-		// Skip if outside screen
-		if x < 0 || x > r.width || y < 0 || y > r.height {
-			continue
+		for _, label := range placeLabels {
+			x, y := r.latLonToScreen(label.Location.Lat, label.Location.Lon, centerLat, centerLon, maxDistance)
+			if r.outOfBounds(x, y) {
+				continue
+			}
+			r.drawText(label.Text, x, y, r.regularFont, ColorText)
 		}
 
-		r.drawText(label.Text, x, y, r.regularFont, ColorText)
-	}
-
-	// Draw airport labels
-	for _, label := range airportLabels {
-		x, y := r.latLonToScreen(label.Location.Lat, label.Location.Lon, centerLat, centerLon, maxDistance)
-
-		// Skip if outside screen
-		if x < 0 || x > r.width || y < 0 || y > r.height {
-			continue
+		for _, label := range airportLabels {
+			x, y := r.latLonToScreen(label.Location.Lat, label.Location.Lon, centerLat, centerLon, maxDistance)
+			if r.outOfBounds(x, y) {
+				continue
+			}
+			r.drawText(label.Text, x, y, r.boldFont, ColorText)
 		}
-
-		r.drawText(label.Text, x, y, r.boldFont, ColorText)
+	} else {
+		// Draw a fallback grid if no map data is loaded
+		r.renderer.SetDrawColor(ColorMap.R, ColorMap.G, ColorMap.B, ColorMap.A)
+		for i := 0; i < r.width; i += 50 {
+			r.renderer.DrawLine(int32(i), 0, int32(i), int32(r.height))
+		}
+		for i := 0; i < r.height; i += 50 {
+			r.renderer.DrawLine(0, int32(i), int32(r.width), int32(i))
+		}
 	}
 
 	// Restore original render target
@@ -254,6 +445,48 @@ func (r *Renderer) drawMap(centerLat, centerLon, maxDistance float64) {
 
 	r.mapDrawn = true
 	r.lastRedraw = time.Now()
+}
+
+// calculateVisibleBounds calculates the lat/lon bounds of the visible area
+func (r *Renderer) calculateVisibleBounds(centerLat, centerLon, maxDistance float64) (latMin, lonMin, latMax, lonMax float64) {
+	// Calculate how much lat/lon changes per pixel
+	latPerPixel := (maxDistance * 2) / float64(r.height) / 60.0
+	lonPerPixel := latPerPixel / math.Cos(centerLat*math.Pi/180.0)
+
+	// Calculate bounds with a margin
+	halfWidth := float64(r.width) / 2.0
+	halfHeight := float64(r.height) / 2.0
+
+	latMin = centerLat - halfHeight*latPerPixel
+	latMax = centerLat + halfHeight*latPerPixel
+	lonMin = centerLon - halfWidth*lonPerPixel
+	lonMax = centerLon + halfWidth*lonPerPixel
+
+	return
+}
+
+// drawTrails renders the trail of an aircraft's past positions
+func (r *Renderer) drawTrails(aircraft map[uint32]*adsb.Aircraft, centerLat, centerLon, maxDistance float64) {
+	for _, a := range aircraft {
+		if len(a.Trail) < 2 {
+			continue
+		}
+
+		// Draw connecting lines between trail points
+		for i := 0; i < len(a.Trail)-1; i++ {
+			// Calculate opacity based on age
+			age := 1.0 - float64(i)/float64(len(a.Trail))
+			alpha := uint8(128 * age)
+
+			// Convert trail positions to screen coordinates
+			x1, y1 := r.latLonToScreen(a.Trail[i].Lat, a.Trail[i].Lon, centerLat, centerLon, maxDistance)
+			x2, y2 := r.latLonToScreen(a.Trail[i+1].Lat, a.Trail[i+1].Lon, centerLat, centerLon, maxDistance)
+
+			// Draw trail segment
+			r.renderer.SetDrawColor(ColorTrail.R, ColorTrail.G, ColorTrail.B, alpha)
+			r.renderer.DrawLine(int32(x1), int32(y1), int32(x2), int32(y2))
+		}
+	}
 }
 
 // drawAircraft renders all aircraft symbols and labels
@@ -274,17 +507,15 @@ func (r *Renderer) drawAircraft(aircraft map[uint32]*adsb.Aircraft, selectedICAO
 		}
 
 		// Draw aircraft symbol
-		r.drawAircraftSymbol(a.X, a.Y, a.Heading, color, icao == selectedICAO)
+		r.drawAircraftSymbol(a.X, a.Y, a.Heading, color)
 
-		// Draw label if it should be visible
-		if a.LabelOpacity > 0 {
-			r.drawAircraftLabel(a, color)
-		}
+		// Draw label
+		r.drawAircraftLabel(a, color)
 	}
 }
 
 // drawAircraftSymbol draws an aircraft symbol at the specified position
-func (r *Renderer) drawAircraftSymbol(x, y, heading int, color sdl.Color, selected bool) {
+func (r *Renderer) drawAircraftSymbol(x, y, heading int, color sdl.Color) {
 	// Convert heading to radians
 	headingRad := float64(heading) * math.Pi / 180.0
 
@@ -329,52 +560,79 @@ func (r *Renderer) drawAircraftSymbol(x, y, heading int, color sdl.Color, select
 	// Tail
 	r.renderer.DrawLine(int32(tailX), int32(tailY), int32(leftTailX), int32(leftTailY))
 	r.renderer.DrawLine(int32(tailX), int32(tailY), int32(rightTailX), int32(rightTailY))
-
-	// Draw selection box if selected
-	if selected {
-		boxSize := int32(20 * r.uiScale)
-		r.renderer.DrawRect(&sdl.Rect{
-			X: int32(x) - boxSize/2,
-			Y: int32(y) - boxSize/2,
-			W: boxSize,
-			H: boxSize,
-		})
-	}
 }
 
 // drawAircraftLabel draws a label for the specified aircraft
 func (r *Renderer) drawAircraftLabel(a *adsb.Aircraft, color sdl.Color) {
-	// Don't draw if opacity is 0
-	if a.LabelOpacity <= 0 {
+	// If this is the first time seeing this aircraft, initialize label size
+	if a.LabelW == 0 || a.LabelH == 0 {
+		a.LabelW = 100
+		a.LabelH = 45
+		a.LabelOpacity = 0
+		a.LabelLevel = 0
+	}
+
+	// Fade in opacity
+	if a.LabelOpacity < 1.0 {
+		a.LabelOpacity += 0.05
+	}
+
+	// Don't draw if opacity is too low
+	if a.LabelOpacity < 0.05 {
 		return
 	}
 
-	// Set alpha based on label opacity
-	alpha := uint8(255.0 * a.LabelOpacity)
+	alpha := uint8(255 * a.LabelOpacity)
 
-	// Label background
+	// Background color with alpha
 	bgColor := ColorLabelBg
 	bgColor.A = alpha
 
-	// Label outline
+	// Draw background
+	r.drawRect(int32(a.LabelX), int32(a.LabelY), int32(a.LabelW), int32(a.LabelH), bgColor)
+
+	// Draw outline
 	lineColor := ColorLabelLine
 	lineColor.A = alpha
+	r.drawRectOutline(int32(a.LabelX), int32(a.LabelY), int32(a.LabelW), int32(a.LabelH), lineColor)
 
-	// Label text colors
+	// Draw label content based on label level
+	textY := int(a.LabelY) + 5
+
+	// Always show callsign
 	textColor := ColorLabel
 	textColor.A = alpha
+	flight := a.Flight
+	if flight == "" {
+		flight = fmt.Sprintf("%06X", a.ICAO)
+	}
+	r.drawText(flight, int(a.LabelX)+5, textY, r.labelFont, textColor)
+	textY += 14
 
-	subTextColor := ColorSubLabel
-	subTextColor.A = alpha
+	// Show altitude and speed if level allows
+	if a.LabelLevel < 1 {
+		subTextColor := ColorSubLabel
+		subTextColor.A = alpha
 
-	// Draw background
-	r.renderer.SetDrawColor(bgColor.R, bgColor.G, bgColor.B, bgColor.A)
-	r.renderer.FillRect(&sdl.Rect{
-		X: int32(a.LabelX),
-		Y: int32(a.LabelY),
-		W: int32(a.LabelW),
-		H: int32(a.LabelH),
-	})
+		// Altitude
+		altText := ""
+		if r.metric {
+			altText = fmt.Sprintf(" %dm", int(float64(a.Altitude)/3.2828))
+		} else {
+			altText = fmt.Sprintf(" %d'", a.Altitude)
+		}
+		r.drawText(altText, int(a.LabelX)+5, textY, r.regularFont, subTextColor)
+		textY += 14
+
+		// Speed
+		speedText := ""
+		if r.metric {
+			speedText = fmt.Sprintf(" %dkm/h", int(float64(a.Speed)*1.852))
+		} else {
+			speedText = fmt.Sprintf(" %dkts", a.Speed)
+		}
+		r.drawText(speedText, int(a.LabelX)+5, textY, r.regularFont, subTextColor)
+	}
 
 	// Draw connecting line from aircraft to label
 	anchorX := int32(a.LabelX)
@@ -384,95 +642,27 @@ func (r *Renderer) drawAircraftLabel(a *adsb.Aircraft, color sdl.Color) {
 		anchorX = int32(a.LabelX + a.LabelW)
 	}
 
-	anchorY := int32(a.LabelY)
-	if a.LabelY+a.LabelH/2 > float64(a.Y) {
-		anchorY = int32(a.LabelY - 4)
-	} else {
-		anchorY = int32(a.LabelY + a.LabelH + 4)
-	}
+	anchorY := int32(a.LabelY + a.LabelH/2)
 
-	// Determine line path points (simply connect aircraft to label anchor)
-	r.renderer.SetDrawColor(lineColor.R, lineColor.G, lineColor.B, lineColor.A)
 	r.renderer.DrawLine(int32(a.X), int32(a.Y), anchorX, anchorY)
-
-	// Draw label outline
-	r.renderer.DrawRect(&sdl.Rect{
-		X: int32(a.LabelX),
-		Y: int32(a.LabelY),
-		W: int32(a.LabelW),
-		H: int32(a.LabelH),
-	})
-
-	// Draw callsign
-	y := int(a.LabelY) + 2
-
-	if a.LabelLevel < 2 {
-		r.drawText(a.Flight, int(a.LabelX)+4, y, r.labelFont, textColor)
-		y += 14 * r.uiScale
-	}
-
-	// Draw altitude and speed if detail level allows
-	if a.LabelLevel < 1 {
-		// Altitude
-		altText := ""
-		if r.metric {
-			altText = fmt.Sprintf(" %dm", int(float64(a.Altitude)/3.2828))
-		} else {
-			altText = fmt.Sprintf(" %d'", a.Altitude)
-		}
-		r.drawText(altText, int(a.LabelX)+4, y, r.regularFont, subTextColor)
-		y += 14 * r.uiScale
-
-		// Speed
-		speedText := ""
-		if r.metric {
-			speedText = fmt.Sprintf(" %dkm/h", int(float64(a.Speed)*1.852))
-		} else {
-			speedText = fmt.Sprintf(" %dkts", a.Speed)
-		}
-		r.drawText(speedText, int(a.LabelX)+4, y, r.regularFont, subTextColor)
-	}
-}
-
-// drawTrails renders the trail of an aircraft's past positions
-func (r *Renderer) drawTrails(aircraft map[uint32]*adsb.Aircraft, centerLat, centerLon, maxDistance float64) {
-	for _, a := range aircraft {
-		if len(a.Trail) < 2 {
-			continue
-		}
-
-		// Draw connecting lines between trail points
-		for i := 0; i < len(a.Trail)-1; i++ {
-			// Calculate opacity based on age
-			age := 1.0 - float64(i)/float64(len(a.Trail))
-			alpha := uint8(128 * age)
-
-			// Convert trail positions to screen coordinates
-			x1, y1 := r.latLonToScreen(a.Trail[i].Lat, a.Trail[i].Lon, centerLat, centerLon, maxDistance)
-			x2, y2 := r.latLonToScreen(a.Trail[i+1].Lat, a.Trail[i+1].Lon, centerLat, centerLon, maxDistance)
-
-			// Draw trail segment
-			r.renderer.SetDrawColor(ColorTrail.R, ColorTrail.G, ColorTrail.B, alpha)
-			r.renderer.DrawLine(int32(x1), int32(y1), int32(x2), int32(y2))
-		}
-	}
 }
 
 // drawScaleBars draws distance scale indicators
 func (r *Renderer) drawScaleBars(maxDistance float64) {
-	// Find appropriate scale
+	// Find appropriate scale - powers of 10
 	scalePower := 0
+	scaleBarDist := 0
+
 	for {
 		dist := math.Pow10(scalePower)
 		screenDist := float64(r.height/2) * (dist / maxDistance)
+
 		if screenDist > 100 {
+			scaleBarDist = int(screenDist)
 			break
 		}
 		scalePower++
 	}
-
-	// Convert distance to screen coordinates
-	scaleBarDist := int(float64(r.height/2) * (math.Pow10(scalePower) / maxDistance))
 
 	// Draw horizontal scale bar
 	r.renderer.SetDrawColor(ColorScaleBar.R, ColorScaleBar.G, ColorScaleBar.B, ColorScaleBar.A)
@@ -493,18 +683,18 @@ func (r *Renderer) drawScaleBars(maxDistance float64) {
 // drawStatus draws status information at the bottom of the screen
 func (r *Renderer) drawStatus(aircraftCount, visibleCount int, centerLat, centerLon float64) {
 	// Format location text
-	locText := fmt.Sprintf("loc %.4fN %.4f%c", centerLat,
+	locText := fmt.Sprintf("%.4fN %.4f%c", centerLat,
 		math.Abs(centerLon), map[bool]byte{true: 'E', false: 'W'}[centerLon >= 0])
 
 	// Format aircraft count text
-	dispText := fmt.Sprintf("disp %d/%d", visibleCount, aircraftCount)
+	dispText := fmt.Sprintf("%d/%d", visibleCount, aircraftCount)
 
 	// Draw status boxes
 	padding := 5
 	x := padding
 	y := r.height - 30*r.uiScale
 
-	// Draw the status boxes using our helper function
+	// Draw the status boxes
 	r.drawStatusBox(&x, &y, "loc", locText, ColorScaleBar)
 	r.drawStatusBox(&x, &y, "disp", dispText, ColorScaleBar)
 }
@@ -526,60 +716,40 @@ func (r *Renderer) drawStatusBox(x *int, y *int, label, value string, color sdl.
 	}
 
 	// Background
-	if messageWidth > 0 {
-		r.roundedBox(*x, *y, *x+labelWidth+messageWidth, *y+messageFontHeight, ROUND_RADIUS, ColorButtonBg)
-	}
+	r.renderer.SetDrawColor(ColorButtonBg.R, ColorButtonBg.G, ColorButtonBg.B, ColorButtonBg.A)
+	r.renderer.FillRect(&sdl.Rect{
+		X: int32(*x),
+		Y: int32(*y),
+		W: int32(labelWidth + messageWidth),
+		H: int32(messageFontHeight),
+	})
 
 	// Label box
-	if labelWidth > 0 {
-		r.roundedBox(*x, *y, *x+labelWidth, *y+messageFontHeight, ROUND_RADIUS, color)
-	}
+	r.renderer.SetDrawColor(color.R, color.G, color.B, color.A)
+	r.renderer.FillRect(&sdl.Rect{
+		X: int32(*x),
+		Y: int32(*y),
+		W: int32(labelWidth),
+		H: int32(messageFontHeight),
+	})
 
-	// Outline message box
-	if messageWidth > 0 {
-		r.roundedRect(*x, *y, *x+labelWidth+messageWidth, *y+messageFontHeight, ROUND_RADIUS, color)
-	}
+	// Outline
+	r.renderer.DrawRect(&sdl.Rect{
+		X: int32(*x),
+		Y: int32(*y),
+		W: int32(labelWidth + messageWidth),
+		H: int32(messageFontHeight),
+	})
 
 	// Label text (in label box)
-	r.drawText(label, *x+labelFontWidth/2, *y, r.labelFont, ColorButtonBg)
+	textBgColor := ColorButtonBg
+	r.drawText(label, *x+labelFontWidth/2, *y, r.labelFont, textBgColor)
 
 	// Value text (in message box)
-	r.drawText(value, *x+labelWidth+messageFontWidth/2, *y, r.messageFont, color)
+	r.drawText(value, *x+labelWidth+messageFontWidth/2, *y, r.regularFont, color)
 
 	// Update x position for next box
 	*x = *x + labelWidth + messageWidth + PAD
-}
-
-// roundedBox draws a filled rounded rectangle
-func (r *Renderer) roundedBox(x1, y1, x2, y2, radius int, color sdl.Color) {
-	r.renderer.SetDrawColor(color.R, color.G, color.B, color.A)
-
-	// Draw filled rectangle
-	r.renderer.FillRect(&sdl.Rect{
-		X: int32(x1),
-		Y: int32(y1),
-		W: int32(x2 - x1),
-		H: int32(y2 - y1),
-	})
-
-	// In a full implementation, we would draw properly rounded corners
-	// but for simplicity, we'll just draw a filled rectangle
-}
-
-// roundedRect draws a rounded rectangle outline
-func (r *Renderer) roundedRect(x1, y1, x2, y2, radius int, color sdl.Color) {
-	r.renderer.SetDrawColor(color.R, color.G, color.B, color.A)
-
-	// Draw rectangle outline
-	r.renderer.DrawRect(&sdl.Rect{
-		X: int32(x1),
-		Y: int32(y1),
-		W: int32(x2 - x1),
-		H: int32(y2 - y1),
-	})
-
-	// In a full implementation, we would draw properly rounded corners
-	// but for simplicity, we'll just draw a rectangle outline
 }
 
 // drawText renders text and returns its dimensions
@@ -611,19 +781,21 @@ func (r *Renderer) drawText(text string, x, y int, font *ttf.Font, color sdl.Col
 	return int(surface.W), int(surface.H)
 }
 
-// latLonToScreen converts geographical coordinates to screen coordinates
-func (r *Renderer) latLonToScreen(lat, lon, centerLat, centerLon, maxDistance float64) (int, int) {
-	// Convert lat/lon to distance in NM
-	dx := (lon - centerLon) * math.Cos((lat+centerLat)/2*math.Pi/180) * 60
-	dy := (lat - centerLat) * 60
+// drawRect draws a filled rectangle
+func (r *Renderer) drawRect(x, y, w, h int32, color sdl.Color) {
+	r.renderer.SetDrawColor(color.R, color.G, color.B, color.A)
+	r.renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
+}
 
-	// Scale to screen coordinates
-	scale := float64(r.height) / (maxDistance * 2)
+// drawRectOutline draws a rectangle outline
+func (r *Renderer) drawRectOutline(x, y, w, h int32, color sdl.Color) {
+	r.renderer.SetDrawColor(color.R, color.G, color.B, color.A)
+	r.renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
+}
 
-	x := r.width/2 + int(dx*scale)
-	y := r.height/2 - int(dy*scale) // Note the minus sign for Y
-
-	return x, y
+// outOfBounds checks if a point is off the screen
+func (r *Renderer) outOfBounds(x, y int) bool {
+	return x < 0 || x >= r.width || y < 0 || y >= r.height
 }
 
 // lerpColor linearly interpolates between two colors
@@ -638,25 +810,57 @@ func lerpColor(a, b sdl.Color, t float64) sdl.Color {
 	}
 }
 
-// latLonFromScreenCoords converts screen coordinates to geographic coordinates
-func latLonFromScreenCoords(lat, lon *float64, x, y int, centerLat, centerLon, maxDistance float64, width, height int) {
-	// Convert screen coordinates to normalized distance
-	scale := maxDistance / float64(height/2)
-	dx := float64(x-width/2) * scale
-	dy := float64(height/2-y) * scale // Note the reversal for Y
-
-	// Convert distance to lat/lon
-	*lat = centerLat + dy/60.0
-	*lon = centerLon + dx/(60.0*math.Cos((*lat+centerLat)/2*math.Pi/180))
+// countAircraft returns the total number of aircraft
+func countAircraft(aircraft map[uint32]*adsb.Aircraft) int {
+	return len(aircraft)
 }
 
-// Clean up resources
+// countVisibleAircraft counts aircraft with valid positions
+func countVisibleAircraft(aircraft map[uint32]*adsb.Aircraft) int {
+	count := 0
+	for _, a := range aircraft {
+		if a.Lat != 0 && a.Lon != 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// Cleanup releases all resources
 func (r *Renderer) Cleanup() {
+	if r.labelFont != nil && r.labelFont != r.regularFont {
+		r.labelFont.Close()
+	}
+
+	if r.boldFont != nil {
+		r.boldFont.Close()
+	}
+
+	if r.regularFont != nil {
+		r.regularFont.Close()
+	}
+
 	if r.mapTexture != nil {
 		r.mapTexture.Destroy()
 	}
 
-	if r.labelFont != nil && r.labelFont != r.regularFont {
-		r.labelFont.Close()
+	if r.renderer != nil {
+		r.renderer.Destroy()
 	}
+
+	if r.window != nil {
+		r.window.Destroy()
+	}
+
+	ttf.Quit()
+	sdl.Quit()
+}
+
+func (r *Renderer) GetWidth() int {
+	return r.width
+}
+
+// GetHeight returns the renderer height
+func (r *Renderer) GetHeight() int {
+	return r.height
 }

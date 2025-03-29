@@ -1,108 +1,201 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	"math"
 	"os"
-	"os/signal"
-	"syscall"
+	"time"
 
-	"github.com/OJPARKINSON/viz1090/internal/app"
-	"github.com/OJPARKINSON/viz1090/internal/config"
+	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 func main() {
-	// Parse command line flags
-	cfg := config.DefaultConfig()
+	fmt.Println("Starting advanced viz1090 test...")
 
-	// Define flags
-	flag.StringVar(&cfg.ServerAddress, "server", cfg.ServerAddress, "Beast server address")
-	flag.IntVar(&cfg.ServerPort, "port", cfg.ServerPort, "Beast server port")
-	flag.Float64Var(&cfg.InitialLat, "lat", cfg.InitialLat, "Initial latitude")
-	flag.Float64Var(&cfg.InitialLon, "lon", cfg.InitialLon, "Initial longitude")
-	flag.BoolVar(&cfg.Metric, "metric", cfg.Metric, "Use metric units")
-	flag.BoolVar(&cfg.Fullscreen, "fullscreen", cfg.Fullscreen, "Fullscreen mode")
-	flag.IntVar(&cfg.ScreenWidth, "width", cfg.ScreenWidth, "Screen width (0 = auto-detect)")
-	flag.IntVar(&cfg.ScreenHeight, "height", cfg.ScreenHeight, "Screen height (0 = auto-detect)")
-	flag.IntVar(&cfg.UIScale, "uiscale", cfg.UIScale, "UI scaling factor")
-	flag.Float64Var(&cfg.InitialZoom, "zoom", cfg.InitialZoom, "Initial zoom level in NM")
-	flag.BoolVar(&cfg.ShowTrails, "trails", cfg.ShowTrails, "Show aircraft trails")
-	flag.IntVar(&cfg.TrailLength, "traillen", cfg.TrailLength, "Length of aircraft trails")
-	flag.IntVar(&cfg.DisplayTTL, "ttl", cfg.DisplayTTL, "Time to display aircraft after last message (seconds)")
-	flag.BoolVar(&cfg.Debug, "debug", cfg.Debug, "Enable debug output")
-
-	// Add help flag
-	helpFlag := flag.Bool("help", false, "Show help")
-
-	flag.Parse()
-
-	// Show help and exit if requested
-	if *helpFlag {
-		showHelp()
-		os.Exit(0)
-	}
-
-	// Create and initialize application
-	application := app.New(cfg)
-	if err := application.Initialize(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing application: %v\n", err)
+	// Initialize SDL
+	if err := sdl.Init(sdl.INIT_VIDEO); err != nil {
+		fmt.Printf("Failed to initialize SDL: %v\n", err)
 		os.Exit(1)
 	}
-	defer application.Cleanup()
+	defer sdl.Quit()
 
-	// Setup signal handling for clean shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigCh
-		fmt.Println("\nReceived shutdown signal. Exiting...")
-		application.Cleanup()
-		os.Exit(0)
-	}()
-
-	// Run the application
-	if err := application.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)
+	// Initialize TTF
+	if err := ttf.Init(); err != nil {
+		fmt.Printf("Failed to initialize TTF: %v\n", err)
+		sdl.Quit()
 		os.Exit(1)
 	}
-}
+	defer ttf.Quit()
 
-func showHelp() {
-	fmt.Println(`
------------------------------------------------------------------------------
-|                        viz1090 ADSB Viewer        Ver : 1.0                |
------------------------------------------------------------------------------
-Usage: viz1090 [options]
+	// Create window and renderer
+	window, err := sdl.CreateWindow(
+		"viz1090 Advanced Test",
+		sdl.WINDOWPOS_CENTERED,
+		sdl.WINDOWPOS_CENTERED,
+		800,
+		600,
+		sdl.WINDOW_SHOWN,
+	)
+	if err != nil {
+		fmt.Printf("Failed to create window: %v\n", err)
+		os.Exit(1)
+	}
+	defer window.Destroy()
 
-Options:
-  --server <address>      Beast server address (default: localhost)
-  --port <port>           Beast server port (default: 30005)
-  --lat <latitude>        Initial latitude (default: 37.6188)
-  --lon <longitude>       Initial longitude (default: -122.3756)
-  --metric                Use metric units
-  --fullscreen            Start in fullscreen mode
-  --width <pixels>        Screen width (0 = auto-detect)
-  --height <pixels>       Screen height (0 = auto-detect)
-  --uiscale <factor>      UI scaling factor (default: 1)
-  --zoom <nm>             Initial zoom level in nautical miles (default: 50)
-  --trails                Show aircraft trails (default: true)
-  --traillen <points>     Length of aircraft trails (default: 50)
-  --ttl <seconds>         Time to display aircraft after last message (default: 30)
-  --debug                 Enable debug output
-  --help                  Show this help
+	renderer, err := sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
+	if err != nil {
+		fmt.Printf("Failed to create renderer: %v\n", err)
+		os.Exit(1)
+	}
+	defer renderer.Destroy()
 
-Keyboard Controls:
-  ESC                     Exit program
-  +/=                     Zoom in
-  -                       Zoom out
-  C                       Center on selected aircraft
-  H                       Return to home location
+	// Create a texture for map caching
+	mapTexture, err := renderer.CreateTexture(
+		sdl.PIXELFORMAT_RGBA8888,
+		sdl.TEXTUREACCESS_TARGET,
+		800, 600)
+	if err != nil {
+		fmt.Printf("Failed to create map texture: %v\n", err)
+		os.Exit(1)
+	}
+	defer mapTexture.Destroy()
 
-Mouse Controls:
-  Click                   Select aircraft
-  Double-click            Zoom in at point
-  Drag                    Pan map
-  Scroll wheel            Zoom in/out
-`)
+	// Load fonts
+	regularFont, err := ttf.OpenFont("font/TerminusTTF-4.46.0.ttf", 12)
+	if err != nil {
+		fmt.Printf("Failed to load regular font: %v\n", err)
+		os.Exit(1)
+	}
+	defer regularFont.Close()
+
+	boldFont, err := ttf.OpenFont("font/TerminusTTF-Bold-4.46.0.ttf", 12)
+	if err != nil {
+		fmt.Printf("Failed to load bold font: %v\n", err)
+		os.Exit(1)
+	}
+	defer boldFont.Close()
+
+	// Simulate aircraft data
+	type Aircraft struct {
+		ICAO    uint32
+		Lat     float64
+		Lon     float64
+		Alt     int
+		Heading int
+		X       int
+		Y       int
+	}
+
+	aircraft := []*Aircraft{
+		{ICAO: 0xABCDEF, Lat: 37.6188, Lon: -122.3756, Alt: 10000, Heading: 45},
+		{ICAO: 0x123456, Lat: 37.7749, Lon: -122.4194, Alt: 25000, Heading: 270},
+		{ICAO: 0x789ABC, Lat: 37.8716, Lon: -122.2727, Alt: 35000, Heading: 180},
+	}
+
+	// Generate texture for map background
+	renderer.SetRenderTarget(mapTexture)
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.Clear()
+
+	// Draw grid for map
+	renderer.SetDrawColor(33, 0, 122, 255) // Map color
+	for i := 0; i < 800; i += 50 {
+		renderer.DrawLine(int32(i), 0, int32(i), 600)
+		renderer.DrawLine(0, int32(i), 800, int32(i))
+	}
+
+	renderer.SetRenderTarget(nil)
+
+	// Main loop
+	running := true
+	frameCount := 0
+	startTime := time.Now()
+	centerLat := 37.6188
+	centerLon := -122.3756
+
+	fmt.Println("Starting main loop...")
+
+	for running {
+		// Process events
+		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+			switch e := event.(type) {
+			case *sdl.QuitEvent:
+				running = false
+				break
+			case *sdl.KeyboardEvent:
+				if e.Keysym.Sym == sdl.K_ESCAPE {
+					running = false
+				}
+			}
+		}
+
+		// Calculate aircraft screen positions
+		for _, a := range aircraft {
+			dx := (a.Lon - centerLon) * 5000
+			dy := (a.Lat - centerLat) * 5000
+			a.X = 400 + int(dx)
+			a.Y = 300 - int(dy)
+		}
+
+		// Clear screen
+		renderer.SetDrawColor(0, 0, 0, 255)
+		renderer.Clear()
+
+		// Draw map background
+		renderer.Copy(mapTexture, nil, nil)
+
+		// Draw aircraft
+		for _, a := range aircraft {
+			// Draw aircraft symbol
+			renderer.SetDrawColor(253, 250, 31, 255) // Yellow
+
+			// Convert heading to radians and calculate direction vectors
+			headingRad := float64(a.Heading) * math.Pi / 180.0
+			dirX := int(15.0 * math.Sin(headingRad))
+			dirY := int(-15.0 * math.Cos(headingRad))
+
+			// Draw aircraft shape
+			renderer.DrawLine(int32(a.X), int32(a.Y), int32(a.X+dirX), int32(a.Y+dirY))
+			renderer.DrawLine(int32(a.X-dirY/2), int32(a.Y-dirX/2), int32(a.X+dirY/2), int32(a.Y+dirX/2))
+
+			// Draw text label
+			text := fmt.Sprintf("%06X %d'", a.ICAO, a.Alt)
+			surface, _ := regularFont.RenderUTF8Solid(text, sdl.Color{R: 255, G: 255, B: 255, A: 255})
+			if surface != nil {
+				texture, _ := renderer.CreateTextureFromSurface(surface)
+				if texture != nil {
+					renderer.Copy(texture, nil, &sdl.Rect{X: int32(a.X + 10), Y: int32(a.Y - 15), W: surface.W, H: surface.H})
+					texture.Destroy()
+				}
+				surface.Free()
+			}
+		}
+
+		// Draw status info
+		statusText := fmt.Sprintf("Aircraft: %d  Center: %.4f, %.4f", len(aircraft), centerLat, centerLon)
+		surface, _ := boldFont.RenderUTF8Solid(statusText, sdl.Color{R: 196, G: 196, B: 196, A: 255})
+		if surface != nil {
+			texture, _ := renderer.CreateTextureFromSurface(surface)
+			if texture != nil {
+				renderer.Copy(texture, nil, &sdl.Rect{X: 10, Y: 570, W: surface.W, H: surface.H})
+				texture.Destroy()
+			}
+			surface.Free()
+		}
+
+		// Present renderer
+		renderer.Present()
+
+		// Report FPS occasionally
+		frameCount++
+		if frameCount%60 == 0 {
+			elapsed := time.Since(startTime).Seconds()
+			fmt.Printf("FPS: %.2f\n", float64(frameCount)/elapsed)
+		}
+
+		sdl.Delay(16) // ~60 FPS
+	}
+
+	fmt.Println("Application exited normally")
 }

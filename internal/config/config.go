@@ -48,19 +48,3 @@ func DefaultConfig() *Config {
 		Debug:         false,
 	}
 }
-
-// LoadFromFile loads configuration from a file
-func LoadFromFile(filename string) (*Config, error) {
-	// Implementation would read a YAML/JSON/TOML file
-	// and parse it into a Config struct
-
-	// For simplicity, just return default config for now
-	return DefaultConfig(), nil
-}
-
-// SaveToFile saves current configuration to a file
-func (c *Config) SaveToFile(filename string) error {
-	// Implementation would serialize the Config struct
-	// to YAML/JSON/TOML and write to a file
-	return nil
-}

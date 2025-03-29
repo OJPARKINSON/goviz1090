@@ -1,26 +1,22 @@
 package beast
 
 import (
-	"errors"
 	"io"
-)
-
-// Message types
-const (
-	ModeAC    = '1' // Mode A/C message
-	ModeShort = '2' // Mode S short message
-	ModeLong  = '3' // Mode S long message
-)
-
-// Message lengths (excluding escape bytes)
-const (
-	ModeACLen    = 2
-	ModeShortLen = 7
-	ModeLongLen  = 14
 )
 
 // Beast protocol constants
 const (
+	// Message types
+	ModeAC    = '1' // Mode A/C message
+	ModeShort = '2' // Mode S short message
+	ModeLong  = '3' // Mode S long message
+
+	// Message lengths (excluding escape bytes)
+	ModeACLen    = 2
+	ModeShortLen = 7
+	ModeLongLen  = 14
+
+	// Beast protocol constants
 	EscapeChar = 0x1A
 )
 
@@ -145,13 +141,13 @@ func (d *Decoder) ReadMessage() (*Message, error) {
 // parseMessage extracts fields from the message buffer
 func (d *Decoder) parseMessage() (*Message, error) {
 	if len(d.msgBuf) < 9 { // At minimum: 0x1A + type + 6-byte timestamp + signal level
-		return nil, errors.New("message too short")
+		return nil, io.ErrShortBuffer
 	}
 
 	// Get message type
 	msgType := d.msgBuf[1]
 	if msgType != ModeAC && msgType != ModeShort && msgType != ModeLong {
-		return nil, errors.New("invalid message type")
+		return nil, io.ErrUnexpectedEOF
 	}
 
 	// Get expected data length
@@ -176,10 +172,17 @@ func (d *Decoder) parseMessage() (*Message, error) {
 
 	// Message data
 	if len(d.msgBuf) < 9+dataLen {
-		return nil, errors.New("message data incomplete")
+		return nil, io.ErrShortBuffer
 	}
 	data := make([]byte, dataLen)
 	copy(data, d.msgBuf[9:9+dataLen])
+
+	// Convert timestamp to time.Time
+	// The Beast timestamp is in 12MHz ticks since midnight
+	// t := time.Now()
+	// midnight := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	timestamp = timestamp / 12000000 // Convert to seconds
+	// msgTime := midnight.Add(time.Duration(timestamp) * time.Second)
 
 	return &Message{
 		Type:        msgType,
@@ -189,8 +192,8 @@ func (d *Decoder) parseMessage() (*Message, error) {
 	}, nil
 }
 
-// Encode creates a Beast format message
-func Encode(msgType byte, data []byte, timestamp uint64, signalLevel byte) []byte {
+// EncodeMessage creates a Beast format message
+func EncodeMessage(msgType byte, data []byte, timestamp uint64, signalLevel byte) []byte {
 	// Estimate buffer size (message + possible escape bytes)
 	buf := make([]byte, 0, 2+6+1+len(data)*2)
 

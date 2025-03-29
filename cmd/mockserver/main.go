@@ -1,12 +1,16 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math"
 	"math/rand"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -355,8 +359,7 @@ func createADSBIdentMessage(icao uint32, callsign string) []byte {
 	msg[9] = byte(((c2 & 0x0F) << 4) | (c3 >> 2))
 	msg[10] = byte(((c3 & 0x03) << 6) | c4)
 
-	// Parity/CRC - real ADS-B requires this, but we'll leave it zero
-	// Receivers will still accept it
+	// CRC fields are left at zero for simplicity
 
 	return msg
 }
@@ -398,8 +401,7 @@ func createADSBPositionMessage(icao uint32, lat, lon float64, alt int, odd bool)
 	msg[9] = byte((lonCPR >> 8) & 0xFF)
 	msg[10] = byte(lonCPR & 0xFF)
 
-	// Parity/CRC - real ADS-B requires this, but we'll leave it zero
-	// Receivers will still accept it
+	// CRC fields are left at zero for simplicity
 
 	return msg
 }
@@ -461,10 +463,7 @@ func createADSBVelocityMessage(icao uint32, speed, heading, climbRate int) []byt
 	msg[8] |= byte((vertRate >> 6) & 0x07)
 	msg[9] = byte((vertRate & 0x3F) << 2)
 
-	// Reserved fields and source/barometric altitude difference
-
-	// Parity/CRC - real ADS-B requires this, but we'll leave it zero
-	// Receivers will still accept it
+	// CRC fields are left at zero for simplicity
 
 	return msg
 }
@@ -504,22 +503,34 @@ func encodeBeastMessage(msgType byte, data []byte, timestamp uint64, signalLevel
 }
 
 func main() {
+	port := flag.Int("port", 30005, "TCP port to listen on")
+	flag.Parse()
+
 	rand.Seed(time.Now().UnixNano())
 
 	// Create server
 	server := NewBeastServer()
 
-	// Add some sample aircraft
+	// Add some sample aircraft around San Francisco Bay Area
 	server.AddAircraft(0xABCDEF, "SWA1234", 37.6188, -122.3756, 10000, 450, 45)
 	server.AddAircraft(0x123456, "UAL789", 37.7749, -122.4194, 25000, 500, 270)
 	server.AddAircraft(0x789ABC, "DAL456", 37.8716, -122.2727, 35000, 550, 180)
 	server.AddAircraft(0x456DEF, "AAL100", 38.0100, -122.1000, 15000, 400, 135)
 	server.AddAircraft(0xFEDCBA, "JBU202", 37.5000, -122.5000, 28000, 480, 90)
 
+	// Setup signal handling for clean shutdown
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		fmt.Println("\nReceived shutdown signal")
+		server.Stop()
+		os.Exit(0)
+	}()
+
 	// Start server
-	fmt.Println("Starting Beast server on port 30005...")
-	err := server.Start(30005)
-	if err != nil {
+	fmt.Printf("Starting Beast server on port %d...\n", *port)
+	if err := server.Start(*port); err != nil {
 		fmt.Printf("Error: %v\n", err)
 	}
 }

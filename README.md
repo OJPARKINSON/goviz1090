@@ -2,8 +2,6 @@
 
 A Go-based ADS-B aircraft visualization tool with interactive map display.
 
-![viz1090-go screenshot](screenshot.png)
-
 ## Features
 
 - Real-time display of aircraft positions, altitude, speed, and other data
@@ -12,7 +10,7 @@ A Go-based ADS-B aircraft visualization tool with interactive map display.
 - Smart label placement with collision avoidance
 - Aircraft trails for tracking movement history
 - Connect to any Beast format data provider (like dump1090)
-- Cross-platform support (Linux, macOS, Windows, Raspberry Pi)
+- Cross-platform support (Linux, macOS including M1/M2, Windows)
 
 ## Installation
 
@@ -22,7 +20,7 @@ A Go-based ADS-B aircraft visualization tool with interactive map display.
 
 ```bash
 # Install dependencies
-sudo apt-get install libsdl2-dev libsdl2-ttf-dev golang-go
+sudo apt-get install libsdl2-dev libsdl2-ttf-dev
 ```
 
 #### On macOS
@@ -45,7 +43,7 @@ git clone https://github.com/OJPARKINSON/viz1090.git
 cd viz1090
 
 # Build the application
-./build.sh
+go build -o bin/viz1090 cmd/viz1090/main.go
 ```
 
 ## Running
@@ -63,8 +61,10 @@ cd viz1090
 ### With the built-in simulator
 
 ```bash
-# Build and run with the simulator
-./build.sh --mock
+# Build and run the simulator
+go build -o bin/mockserver cmd/mockserver/main.go
+./bin/mockserver &
+./bin/viz1090
 ```
 
 ## Command Line Options
@@ -87,7 +87,6 @@ Options:
   --traillen <points>     Length of aircraft trails (default: 50)
   --ttl <seconds>         Time to display aircraft after last message (default: 30)
   --debug                 Enable debug output
-  --help                  Show this help
 ```
 
 ## Controls
@@ -97,8 +96,6 @@ Options:
 - **ESC**: Exit program
 - **+/=**: Zoom in
 - **-**: Zoom out
-- **C**: Center on selected aircraft
-- **H**: Return to home location
 
 ### Mouse
 
